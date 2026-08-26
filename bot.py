@@ -20,11 +20,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ==================== SOZLAMALAR ====================
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
+
 ADMIN_IDS = [
-    int(x) for x in os.environ.get("ADMIN_IDS", "").replace(" ", "").split(",")
+    int(x) for x in os.environ.get("ADMIN_IDS", "").strip().replace(" ", "").split(",")
     if x
 ]
+
 DB_PATH = os.environ.get("DB_PATH", "kino.db")
 
 # Kino qo'shish jarayonining bosqichlari
