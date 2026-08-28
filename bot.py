@@ -20,17 +20,17 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ==================== SOZLAMALAR ====================
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
-
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 ADMIN_IDS = [
-    int(x) for x in os.environ.get("ADMIN_IDS", "").strip().replace(" ", "").split(",")
+    int(x) for x in os.environ.get("ADMIN_IDS", "").replace(" ", "").split(",")
     if x
 ]
-
 DB_PATH = os.environ.get("DB_PATH", "kino.db")
 
 # Kino qo'shish jarayonining bosqichlari
 ASK_CODE, ASK_NAME, ASK_VIDEO = range(3)
+# Reklama yuborish bosqichi
+ASK_BROADCAST = 100
 
 
 # ==================== BAZA ====================
@@ -47,8 +47,46 @@ def init_db():
         )
         """
     )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            first_name TEXT
+        )
+        """
+    )
     conn.commit()
     conn.close()
+
+
+def record_user(user):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT OR IGNORE INTO users (user_id, username, first_name) VALUES (?, ?, ?)",
+        (user.id, user.username, user.first_name),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_all_user_ids():
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT user_id FROM users")
+    rows = [r[0] for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def count_users():
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM users")
+    n = cur.fetchone()[0]
+    conn.close()
+    return n
 
 
 def get_db():
@@ -113,6 +151,7 @@ def is_admin(user_id):
 
 # ==================== ODDIY FOYDALANUVCHI ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    record_user(update.effective_user)
     await update.message.reply_text(
         "Salom! 🎬 Kino botiga xush kelibsiz.\n\n"
         "— Kino kodini yuboring (masalan: 101)\n"
@@ -122,6 +161,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    record_user(update.effective_user)
     text = update.message.text.strip()
 
     # Kod bo'yicha qidirish (faqat raqamlardan iborat bo'lsa)
@@ -266,6 +306,49 @@ async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Sizning Telegram ID: {update.effective_user.id}")
 
 
+# ==================== ADMIN: REKLAMA YUBORISH ====================
+async def broadcast_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("Bu buyruq faqat adminlar uchun.")
+        return ConversationHandler.END
+
+    await update.message.reply_text(
+        "Barcha foydalanuvchilarga yuboriladigan xabarni kiriting "
+        "(matn, rasm, video — istalgani bo'lishi mumkin).\n\n"
+        "Bekor qilish uchun /cancel yozing."
+    )
+    return ASK_BROADCAST
+
+
+async def broadcast_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_ids = get_all_user_ids()
+    total = len(user_ids)
+    sent = 0
+    failed = 0
+
+    await update.message.reply_text(f"⏳ {total} ta foydalanuvchiga yuborilyapti...")
+
+    for user_id in user_ids:
+        try:
+            await update.message.copy(chat_id=user_id)
+            sent += 1
+        except Exception as e:
+            logger.warning(f"Broadcast xatosi ({user_id}): {e}")
+            failed += 1
+
+    await update.message.reply_text(
+        f"✅ Reklama yuborildi!\n"
+        f"Yuborildi: {sent}\n"
+        f"Xato: {failed}"
+    )
+    return ConversationHandler.END
+
+
+async def broadcast_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Bekor qilindi.")
+    return ConversationHandler.END
+
+
 # ==================== MAIN ====================
 def main():
     if not BOT_TOKEN:
@@ -284,11 +367,20 @@ def main():
         fallbacks=[CommandHandler("cancel", addmovie_cancel)],
     )
 
+    broadcast_conv = ConversationHandler(
+        entry_points=[CommandHandler("broadcast", broadcast_start)],
+        states={
+            ASK_BROADCAST: [MessageHandler(~filters.COMMAND, broadcast_send)],
+        },
+        fallbacks=[CommandHandler("cancel", broadcast_cancel)],
+    )
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("myid", myid))
     app.add_handler(CommandHandler("delmovie", delmovie))
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(add_conv)
+    app.add_handler(broadcast_conv)
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
